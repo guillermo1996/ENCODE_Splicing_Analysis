@@ -1,3 +1,6 @@
+# Produced files
+RBPs/*
+
 # History files
 .Rhistory
 .Rapp.history
