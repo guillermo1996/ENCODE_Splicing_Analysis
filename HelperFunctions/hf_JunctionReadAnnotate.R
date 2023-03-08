@@ -3,9 +3,9 @@
 #' The different versions can be downloaded
 #' \href{http://ftp.ensembl.org/pub/release-105/gtf/homo_sapiens/}{here}.
 #'
-#' @param gtf_path path to the reference genome .gtf file.
+#' @param gtf_path Path to the reference genome GTF file.
 #'
-#' @return the connection to the reference genome DB.
+#' @return Connection to the reference genome DB.
 #' @export
 loadEdb <- function(gtf_path) {
   if (!exists("edb")) {
@@ -24,9 +24,9 @@ loadEdb <- function(gtf_path) {
 #' The different versions can be downloaded
 #' \href{https://github.com/Boyle-Lab/Blacklist/tree/master/lists}{here}.
 #'
-#' @param blacklist_path path to the ENCODE blacklisted regions .bed file.
+#' @param blacklist_path Path to the ENCODE blacklisted regions BED file.
 #'
-#' @return the ENCODE blacklisted region in GRanges object.
+#' @return The ENCODE blacklisted region in GRanges object.
 #' @export
 loadEncodeBlacklist <- function(blacklist_path) {
   if (!exists("encode_blacklist_hg38")) {
@@ -39,6 +39,30 @@ loadEncodeBlacklist <- function(blacklist_path) {
   return(encode_blacklist_hg38)
 }
 
+#' Read JUNC files and extract the junctions
+#'
+#' From the .junc files generated using
+#' \href{https://regtools.readthedocs.io/en/latest/commands/junctions-extract/}{regtools
+#' junctions extract}, this functions process the columns into the desired
+#' format and joins the information from junctions across all samples.
+#'
+#' One file is generated at the end, which contains information about all the
+#' junctions found inside the samples' .junc files. It also contains the reads
+#' per sample of each junction.
+#'
+#' @param metadata Dataframe containing all the metadata.
+#' @param main_samples_path Path to where the JUNC files are stored.
+#' @param num_cores Number of multiprocessing cores to use. Memory requirements
+#'   significantly increase with the number of cores.
+#' @param rw_disk Whether to store the results in disk. By default, TRUE.
+#' @param overwrite Whether to overwrite previously generated results from the
+#'   function. If set to FALSE and 'rw_disk' is set to TRUE, the function looks
+#'   for the files in memory and loads them if possible. By default, FALSE.
+#'
+#' @return Data.frame containing every junction found in all samples. The
+#'   dataframe will contain information about the junction and the reads of that
+#'   junction in each sample.
+#' @export
 junctionReading <- function(metadata,
                             main_samples_path,
                             num_cores = 4,
@@ -152,6 +176,41 @@ junctionReading <- function(metadata,
   return(all_reads_combined)
 }
 
+#' Annotates all junctions across samples
+#'
+#' Given a dataframe of junctions with the columns junID, seqnames, start, end,
+#' width and strand, this function executes the annotation pipeline in which,
+#' first, the junction overlapping the ENCODE blacklisted regions are removed.
+#' Then, using the function \link[dasper]{junction_annot}, the junctions are
+#' classified and annotated.
+#'
+#' From all the junctions, we only keep those which fall in the category of
+#' "annotated", "novel_donor" and "novel_acceptor". We also remove junctions
+#' shorted than 25bp and those from ambiguous genes. Lastly, we estimated the
+#' MaxEntScore of the novel and acceptor sequences
+#' (\href{http://hollywood.mit.edu/burgelab/maxent/Xmaxentscan_scoreseq.html}{reference})
+#' and the biotype percentage of their transcripts.
+#'
+#' @param all_reads_combined Dataframe containing every junction found across
+#'   all samples.
+#' @param main_samples_path Path to where the JUNC files are stored.
+#' @param blacklist_path Path to the ENCODE blacklisted regions BED file.
+#' @param gtf_path Path to the reference genome GTF file.
+#' @param bedtools_path Path to the
+#'   \href{https://bedtools.readthedocs.io/en/latest/}{bedtools} executable. Can
+#'   be left empty if bedtools is in default PATH.
+#' @param fasta_path Path to the fasta .fa file for the reference genome.
+#' @param fordownload_path Path to the MaxEntScan pearl scripts. Can be
+#'   downloaded from
+#'   \href{http://hollywood.mit.edu/burgelab/maxent/download/}{here}.
+#' @param rw_disk Whether to store the results in disk. By default, TRUE.
+#' @param overwrite Whether to overwrite previously generated results from the
+#'   function. If set to FALSE and 'rw_disk' is set to TRUE, the function looks
+#'   for the files in memory and loads them if possible. By default, FALSE.
+#'
+#' @return Dataframe containing all the junctions with their relevant
+#'   information annotated.
+#' @export
 junctionAnnotation <- function(all_reads_combined,
                                main_samples_path,
                                blacklist_path = "/home/grocamora/RytenLab-Research/Additional_files/hg38-blacklist.v2.bed",
@@ -240,10 +299,9 @@ junctionAnnotation <- function(all_reads_combined,
 #' Remove the junctions from the ENCODE blacklisted regions
 #'
 #' @param GRdata GRanges class object with the relevant junctions.
-#' @param encode_blacklist_hg38 GRanges class object with the blacklisted
-#'   regions.
+#' @param encode_blacklist_hg38 GRanges class object with the blacklisted regions.
 #'
-#' @return junctions that do not overlap with the blacklisted regions.
+#' @return Junctions that do not overlap with the blacklisted regions.
 #' @export
 removeEncodeBlacklistRegions <- function(GRdata,
                                          encode_blacklist_hg38) {
@@ -270,7 +328,7 @@ removeEncodeBlacklistRegions <- function(GRdata,
   return(GRdata)
 }
 
-#' Annotates and categorize every junction
+#' Annotate and categorize every junction
 #'
 #' @param GRdata GRanges class object with the relevant junctions.
 #' @param edb The connection to the reference genome DB.
@@ -290,8 +348,7 @@ annotateDasper <- function(GRdata, edb) {
 
 #' Remove the junctions shorter than 25bp.
 #'
-#' @param input_SR_details Tibble (or data.frame) bject with the relevant
-#'   junctions.
+#' @param input_SR_details Dataframe object with the relevant junctions.
 #'
 #' @return Junctions bigger than 25bp.
 #' @export
@@ -305,8 +362,7 @@ removeShortJunctions <- function(input_SR_details) {
 
 #' Remove the junctions with uncategorized classification.
 #'
-#' @param input_SR_details Tibble (or data.frame) bject with the relevant
-#'   junctions.
+#' @param input_SR_details Dataframe object with the relevant junctions.
 #'
 #' @return Junctions categorized as "annotated", "novel_donor" or
 #'   "novel_acceptor".
@@ -321,8 +377,7 @@ removeUncategorizedJunctions <- function(input_SR_details) {
 
 #' Remove the junctions from ambiguous genes.
 #'
-#' @param input_SR_details Tibble (or data.frame) bject with the relevant
-#'   junctions.
+#' @param input_SR_details Dataframe object with the relevant junctions.
 #'
 #' @return Junctions assigned to only one gene.
 #' @export
@@ -335,20 +390,19 @@ removeAmbiguousGenes <- function(input_SR_details) {
 
 #' Executes the MaxEntScan
 #'
-#' @param input_SR_details Tibble (or data.frame) bject with the relevant
-#'   junctions.
-#' @param bedtools_path path to the
+#' @param input_SR_details Dataframe object with the relevant junctions.
+#' @param bedtools_path Path to the
 #'   \href{https://bedtools.readthedocs.io/en/latest/}{bedtools} executable. Can
 #'   be left empty if bedtools is in default PATH.
-#' @param fasta_path path to the fasta .fa file for the reference genome.
-#' @param fordownload_path path to the MaxEntScan pearl scripts. Can be
+#' @param fasta_path Path to the fasta fa file for the reference genome.
+#' @param fordownload_path Path to the MaxEntScan pearl scripts. Can be
 #'   downloaded from
 #'   \href{http://hollywood.mit.edu/burgelab/maxent/download/}{here}.
 #'
 #' @return Junction dataframe with the ss5 and ss3 scores.
 #' @export
 generateMaxEntScore <- function(input_SR_details,
-                                bedtools_path = "~/tools/bedtools/",
+                                bedtools_path = "",
                                 fasta_path = "~/RytenLab-Research/Additional_files/Homo_sapiens.GRCh38.dna.primary_assembly.fa",
                                 fordownload_path = "~/tools/fordownload/") {
   logger::log_info("\t\t Calculating the MaxEntScore.")
@@ -457,8 +511,7 @@ generateMaxEntScore <- function(input_SR_details,
 
 #' Calculates the biotype percentage
 #'
-#' @param input_SR_details Tibble (or data.frame) bject with the relevant
-#'   junctions.
+#' @param input_SR_details Dataframe object with the relevant junctions.
 #' @param edb The connection to the reference genome DB.
 #'
 #' @return Annotated junctions with their protein coding and lncRNA biotypes

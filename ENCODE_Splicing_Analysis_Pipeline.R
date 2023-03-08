@@ -13,13 +13,10 @@ options(lifecycle_verbosity = "warning")
 
 ## Load helper functions ----
 source("HelperFunctions/hf_DownloadExtract.R")
-source("HelperFunctions/hf_JunctionRead.R")
+source("HelperFunctions/hf_JunctionReadAnnotate.R")
 source("HelperFunctions/hf_Distances.R")
-#source("HelperFunctions/hf_JunctionExtractionAnnotation.R")
-#source("HelperFunctions/hf_Distances.R")
-#source("HelperFunctions/hf_NeverMisspliced.R")
-#source("HelperFunctions/hf_DB_generation.R")
-#source("HelperFunctions/hf_Post_execution.R")
+source("HelperFunctions/hf_NeverMisspliced.R")
+source("HelperFunctions/hf_GenerateDB.R")
 
 ## Logger options ----
 log_file <- "ENCODE_Splicing_Analysis.log"
@@ -144,7 +141,7 @@ all_distances_pruned <- removeAmbiguousPairing(all_distances_raw,
                                                overwrite = overwrite)
 
 # 5. Clustering of the sample ----
-foreach(i = seq(target_RBPs)) %do%{
+foreach(i = seq(target_RBPs)[1]) %do%{
   target_RBP <- target_RBPs[i]
   
   ## Target RBP variables

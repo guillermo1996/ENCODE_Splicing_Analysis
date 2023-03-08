@@ -1,16 +1,22 @@
-#' Title
+#' Calculates the distance of the novel junctions
 #'
-#' @param metadata
-#' @param main_samples_path
-#' @param annotated_SR_details
-#' @param all_reads_combined
-#' @param num_cores Number of multiprocessing cores to use. Memory requirements significantly increase with the number of cores.
+#' @param metadata Dataframe containing all the metadata.
+
+#' @param main_samples_path Path to where the JUNC files are stored.
+#' @param annotated_SR_details Dataframe containing all the junctions with their
+#'   relevant information annotated.
+#' @param all_reads_combined Dataframe containing every junction found across
+#'   all samples.
+#' @param num_cores Number of multiprocessing cores to use. Memory requirements
+#'   significantly increase with the number of cores.
 #' @param rw_disk Whether to store the results in disk. By default, TRUE.
 #' @param overwrite Whether to overwrite previously generated results from the
 #'   function. If set to FALSE and 'rw_disk' is set to TRUE, the function looks
 #'   for the files in memory and loads them if possible. By default, FALSE.
 #'
-#' @return
+#' @return Dataframe with all the raw novel junctions and the associated
+#'   reference junction with information about the distance and other reads
+#'   statistics.
 #' @export
 juctionPairing <- function(metadata,
                            main_samples_path,
@@ -172,14 +178,14 @@ getDistancesDataFrame <- function(query,
   return(df)
 }
 
-#' Title
+#' Removes the ambiguous pairings
 #'
-#' @param all_distances_raw 
-#' @param main_samples_path 
-#' @param rw_disk 
-#' @param overwrite 
+#' @param all_distances_raw Dataframe with all the raw novel junctions and the associated reference junction with information about the distance and other reads statistics.
+#' @param main_samples_path Path to where the JUNC files are stored.
+#' @param rw_disk Whether to store the results in disk. By default, TRUE.
+#' @param overwrite Whether to overwrite previously generated results from the function. If set to FALSE and 'rw_disk' is set to TRUE, the function looks for the files in memory and loads them if possible. By default, FALSE.
 #'
-#' @return
+#' @return Dataframe with all the pruned novel junctions and the associated reference junction.
 #' @export
 removeAmbiguousPairing <- function(all_distances_raw,
                                    main_samples_path,
@@ -231,6 +237,22 @@ removeAmbiguousPairing <- function(all_distances_raw,
   return(all_distances_tidy)
 }
 
+#' Summarize the read statistics
+#'
+#' Three different statistics about the reads per junction are calculated:
+#' number of samples in which the junction is found, average number of reads per
+#' sample and the total number of reads across all samples.
+#'
+#' @param samples Vector containing the samples of the particular cluster.
+#' @param cluster_distances_pruned Dataframe with the cluster pruned novel
+#'   junctions and the associated reference junction.
+#' @param cluster_split_reads Dataframe containing all the reads for each
+#'   junction in the cluster.
+#'
+#' @return Dataframe containing the information of all novel junctions (and
+#'   their associated reference junctions) for the given cluster of samples. It
+#'   also includes read statistics.
+#' @export
 addCounts <- function(samples,
                       cluster_distances_pruned,
                       cluster_split_reads) {

@@ -1,5 +1,6 @@
 # Produced files
 RBPs/*
+*.log
 
 # History files
 .Rhistory

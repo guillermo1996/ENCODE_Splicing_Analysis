@@ -1,22 +1,26 @@
 #' Pipeline to generate the novel and reference junctions database dataframes
 #'
-#' @param cluster vector containing the samples of the particular cluster.
-#' @param cluster the type of the experiment that the sample belongs to (i.e.
-#'   case or control).
-#' @param distances_tidy_all dataframe containing the information of all novel junctions (and
-#'   their associated reference junctions) and all the never mis-spliced
-#'   junctions for the given cluster of samples. It also includes read
-#'   statistics.
-#' @param write_output whether to store the results in disk. By default, TRUE.
-#' @param overwrite whether to look for the previous results of this function
-#'   and load them into memory, instead of executing the process again. By
-#'   default, FALSE.
+#' @param cluster_distances_tidy_all Dataframe with all the novel junctions and
+#'   the associated reference junction and all the never mis-spliced junctions
+#'   for the given cluster of samples. It also includes read statistics.
+#' @param cluster_annotated_SR_details Dataframe containing the cluster
+#'   junctions with their relevant information annotated.
+#' @param cluster_path Path to where to save the files related to the cluster.
+#' @param cluster_name Name of the cluster.
+#' @param u12_introns_path Path to where the u12 (or minor) intron list is
+#'   located in disk.
+#' @param u2_introns_path Path to where the u2 (or major) intron list is located
+#'   in disk.
+#' @param rw_disk Whether to store the results in disk. By default, TRUE.
+#' @param overwrite Whether to overwrite previously generated results from the
+#'   function. If set to FALSE and 'rw_disk' is set to TRUE, the function looks
+#'   for the files in memory and loads them if possible. By default, FALSE.
 #'
 #' @return NULL
 #' @export
 generateDB <- function(cluster_distances_tidy_all,
                        cluster_annotated_SR_details,
-                       project_path,
+                       cluster_path,
                        cluster_name,
                        u12_introns_path = "/home/grocamora/RytenLab-Research/Additional_files/minor_introns_tidy.rds",
                        u2_introns_path = "/home/grocamora/RytenLab-Research/Additional_files/major_introns_tidy.rds",
@@ -28,11 +32,11 @@ generateDB <- function(cluster_distances_tidy_all,
   ## for the results of the function in disk. If they have already been
   ## generated, the function is not executed and the files are returned.
   if (rw_disk & !overwrite & 
-      file.exists(paste0(project_path, cluster_name, "_db_introns.rds")) &
-      file.exists(paste0(project_path, cluster_name, "_db_novel.rds"))){
+      file.exists(paste0(cluster_path, cluster_name, "_db_introns.rds")) &
+      file.exists(paste0(cluster_path, cluster_name, "_db_novel.rds"))){
     logger::log_info("\t\t\t\t Ignoring the DB generation process.")
-    logger::log_info("\t\t\t\t File ", project_path, cluster_name, "_db_introns.rds already exists.")
-    logger::log_info("\t\t\t\t File ", project_path, cluster_name, "_db_novel.rds already exists.")
+    logger::log_info("\t\t\t\t File ", cluster_path, cluster_name, "_db_introns.rds already exists.")
+    logger::log_info("\t\t\t\t File ", cluster_path, cluster_name, "_db_novel.rds already exists.")
     return()
   }
   
@@ -56,10 +60,10 @@ generateDB <- function(cluster_distances_tidy_all,
                               u2_introns_path = u2_introns_path)
   
   if(rw_disk){
-    logger::log_info("\t\t\t\t Saving output to ", project_path, cluster_name, "_db_novel.rds")
-    db_novel %>% saveRDS(paste0(project_path, cluster_name, "_db_novel.rds"))
-    logger::log_info("\t\t\t\t Saving output to ", project_path, cluster_name, "_db_introns.rds")
-    db_introns %>% saveRDS(paste0(project_path, cluster_name, "_db_introns.rds"))
+    logger::log_info("\t\t\t\t Saving output to ", cluster_path, cluster_name, "_db_novel.rds")
+    db_novel %>% saveRDS(paste0(cluster_path, cluster_name, "_db_novel.rds"))
+    logger::log_info("\t\t\t\t Saving output to ", cluster_path, cluster_name, "_db_introns.rds")
+    db_introns %>% saveRDS(paste0(cluster_path, cluster_name, "_db_introns.rds"))
   }
   
   logger::log_info("\t\t\t\t DB generation process executed successfully.")
@@ -67,11 +71,13 @@ generateDB <- function(cluster_distances_tidy_all,
 
 #' Generates the novel junctions DB
 #'
-#' @param df_misspliced dataframe containing the information of all novel
+#' @param df_misspliced Dataframe containing the information of all novel
 #'   junctions (and their associated reference junctions) and their read
 #'   statistics.
+#' @param cluster_annotated_SR_details Dataframe containing the cluster
+#'   junctions with their relevant information annotated.
 #'
-#' @return dataframe with all the novel junctions and their most relevant
+#' @return Dataframe with all the novel junctions and their most relevant
 #'   information.
 #' @export
 generateNovelDB <- function(df_misspliced,
@@ -107,13 +113,13 @@ generateNovelDB <- function(df_misspliced,
 
 #' Generates the reference junctions DB
 #'
-#' @param df_misspliced dataframe containing the information of all novel
+#' @param df_misspliced Dataframe containing the information of all novel
 #'   junctions (and their associated reference junctions) and their read
 #'   statistics.
-#' @param df_never dataframe containing the information of all never mis-spliced
+#' @param df_never Dataframe containing the information of all never mis-spliced
 #'   junctions and their read statistics.
 #'
-#' @return dataframe with all the reference junctions and never mis-spliced
+#' @return Dataframe with all the reference junctions and never mis-spliced
 #'   junctions with their most relevant information.
 #' @export
 generateIntronDB <- function(df_misspliced, 
@@ -207,16 +213,18 @@ missplicingClass <- function(novel_donor_ratio, novel_acceptor_ratio) {
   return(ref_junction_category)
 }
 
-#' Title
+#' Categorize the introns in u12 or u2
 #'
-#' @param db_introns 
-#' @param u12_introns_path 
-#' @param u2_introns_path 
+#' @param db_introns Dataframe with all the reference junctions and never
+#'   mis-spliced junctions with their most relevant information.
+#' @param u12_introns_path Path to where the u12 (or minor) intron list is
+#'   located in disk.
+#' @param u2_introns_path Path to where the u2 (or major) intron list is located
+#'   in disk.
 #'
-#' @return
+#' @return Dataframe with all the reference junctions and never mis-spliced
+#'   junctions with their most relevant information.
 #' @export
-#'
-#' @examples
 addIntronType <- function(db_introns,
                           u12_introns_path = "",
                           u2_introns_path = ""){
