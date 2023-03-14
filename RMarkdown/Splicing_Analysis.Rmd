@@ -1,0 +1,716 @@
+---
+title: "ENCODE RBP - Summary Results"
+author: 
+- name: "Guillermo Rocamora Pérez"
+  affiliation: UCL
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  bookdown::html_document2:
+    figure_caption: yes
+    code_folding: show
+    theme: paper
+    highlight: haddock
+    df_print: paged
+    toc: true
+    toc depth: 3
+    toc_float: true
+    number_sections: true
+  md_document:
+    variant: markdown_github
+    toc: true
+    number_sections: true
+always_allow_html: true
+---
+
+```{r setup, include = FALSE}
+shhh <- suppressPackageStartupMessages
+shhh(library(patchwork))
+shhh(library(ggnewscale))
+shhh(library(here))
+shhh(library(GenomicRanges))
+shhh(library(doParallel))
+shhh(library(foreach))
+shhh(library(tidyverse))
+options(dplyr.summarise.inform = FALSE)
+options(lifecycle_verbosity = "warning")
+
+source(here::here("Helper_Functions/hf_Analysis.R"))
+
+knitr::opts_chunk$set(echo = F, warning = F, message = F, out.width="85%", fig.align = "center", dpi = 300)
+
+print_df <- function(x, 
+                     style = "html", 
+                     limit = NULL, random = F, seed = NULL,
+                     order = list(), autoWidth = FALSE, pageLength = 10, rownames = FALSE, compact = T,
+                     full_width = F){
+  if(style == "html"){
+    dt_class = "display cell-border nowrap"
+    if(compact) dt_class = paste0(dt_class, " compact")
+    DT::datatable(x,
+                  options = list(scrollX = TRUE,
+                                 autoWidth = autoWidth,
+                                 pageLength = pageLength,
+                                 order = order),
+                  class = dt_class,
+                  rownames = rownames)
+  }else{
+    if(length(order) != 0){
+      if(order[[2]] == "desc"){
+        x <- x %>% dplyr::arrange(desc(.[[order[[1]]+1]]))
+      }else{
+        x <- x %>% dplyr::arrange(.[[order[[1]]+1]])
+      }
+    }
+    
+    if(!is.null(limit)){
+      if(random){
+        if(!is.null(seed)) set.seed(seed)
+        x <- x %>% .[sample(1:nrow(.), limit), ]
+      }else{
+        x <- x %>% .[1:limit, ]
+      }
+    }
+    
+    x %>%
+      kableExtra::kbl(booktabs = T, linesep = "") %>%
+      kableExtra::kable_classic(full_width = full_width, "hover", "striped", html_font = "Cambria", font_size = 14) %>%
+      kableExtra::row_spec(0, bold = T, font_size = 16)
+  }
+}
+
+knit_output = "html"
+```
+
+```{r load-theme, echo = F, results = "asis"}
+## Custom sciRmdTheme with increased width.
+## Please ask guillermorocamora@gmail.com for more details.
+if(knit_output == "html"){
+  sciRmdTheme::set.theme(
+    theme = "default",
+    color = NULL,
+    header.sticky = FALSE,
+    list.group.icon = "arrow",
+    font.family = "Arial",
+    font.color = "black",
+    header.color = "darkblue"
+  )
+}
+
+custom_gg_theme <- theme(plot.title = element_text(size = 12, face = "bold"),
+                  panel.border = ggplot2::element_rect(colour = "black", fill = NA, linewidth = 1),
+                  axis.text.x = ggplot2::element_text(color = "black", size = 8, angle = 0, hjust = 0.5),
+                  axis.text.y = ggplot2::element_text(color = "black", size = 8),
+                  axis.title.x = ggplot2::element_text(face = "bold", size = 11, margin=margin(5,0,0,0)),
+                  axis.title.y = ggplot2::element_text(face = "bold", size = 11, margin=margin(0,10,0,0)),
+                  panel.grid.minor = element_line(color = "#444444", linewidth  = 0.05, linetype = 2),
+                  panel.grid.major.y = element_line(color = "#444444", linewidth  = 0.05, linetype = 2),
+                  panel.grid.major.x = element_line(color = "#444444", linewidth  = 0.1),
+                  panel.background = element_rect(fill = "#FBFBFB"),
+                  legend.title = element_text(size=12),
+                  legend.text = element_text(size=10),
+                  legend.position = "top",
+                  legend.key = element_rect(color="black"),
+                  legend.key.size = unit(1, 'lines'),
+                  strip.text.x = element_text(color = "black", face = "bold", size = 9),
+                  strip.background = element_rect(color="black", linewidth=1, linetype="solid"),
+                  strip.text.y = element_text(color = "black", face = "bold", size = 9),
+                  plot.margin = margin(0.5, 0.5, 0.2, 0.5, "cm"))
+
+Category_levels <- c("Splicing_regulation", "Spliceosome", "NMD", "Exon_junction_complex")
+Category_labels <- c("Splicing_regulation" = "Splicing Regulation",
+                     "Spliceosome" = "Spliceosome",
+                     "Exon_junction_complex" = "Exon junction complex", 
+                     "NMD" = "Nononsense-mediated decay")
+Novel_labels <- c("novel_donor" = "Novel donor",
+                  "novel_acceptor" = "Novel acceptor")
+novel_label_mini_names <- c("donor" = "Novel donor", "acceptor" = "Novel acceptor")
+```
+
+```{r load-theme_2, echo = F, results = "asis"}
+if(knit_output == "html"){
+cat('
+<style type="text/css">
+.dataTables_scrollHeadInner{
+  width:100% !important;
+}
+.dataTables_scrollHeadInner table{
+  width:100% !important;
+}
+.code-folding-btn {
+  display: none;
+}
+</style>')
+}
+```
+
+# Introduction and data used
+
+In this study, we present the results of analysing the mis-splicing noise across different samples before and after the shRNA knockdown of a specific target gene, responsible for the production of different RNA binding proteins (RBPs). 
+
+More precisely, from the 356 RBPs studied by *Van Nostrand et al.* in 2020 in his publication [A Large-Scale Binding and Functional Map of Human RNA Binding Proteins](https://www.nature.com/articles/s41586-020-2077-3), 115 of them were functionally categorized under the following categories: splicing regulation, spliceosome or exon junction complex. However, only 56 of those were also profiled by ENCODE fulfilling the following requirements:
+
+* Need for at least 4 experiments:
+    - 1 case experiment for cell line *K562*.
+    - 1 case experiment for cell line *HepG2*.
+    - 1 control experiment for cell line *K562*.
+    - 1 control experiment for cell line *HepG2*.
+* Need for 2 different samples per cell line and cluster. That is, 2 different isogenic replicates per experiment.
+
+In total, we required 8 samples per studied RBP, divided in 4 cases and 4 controls which, at the same time, are divided in 4 cell line *HepG2* and 4 cell line *K562*.
+
+Across this document, we will refer to each possible target gene as a project and each sample type (i.e. control or case) as clusters. That is, we will study 56 different projects, each one consisting of two clusters with 4 samples each.
+
+## Execution parameters
+
+To properly execute this `.Rmd`, we need to define some variables:
+
+```{r data-preparation, echo = T}
+# Data location
+RBP_path <- here::here("RBPs/")
+metadata_path <- here::here("Metadata/metadata_complete.tsv")
+
+# Loading the metadata
+metadata <- readr::read_delim(metadata_path, show_col_types = F)
+
+target_RBPs = metadata %>% 
+  dplyr::filter(if_any(c(Splicing_regulation, Spliceosome, Exon_junction_complex, NMD), ~ . != 0)) %>%
+  dplyr::pull(target_gene) %>%
+  unique()
+
+metadata_RBPs <- metadata %>% 
+  dplyr::filter(target_gene %in% target_RBPs) %>%
+  tidyr::pivot_longer(c("Splicing_regulation", "Spliceosome", "Exon_junction_complex", "NMD"), 
+                      names_to = "Category") %>%
+  dplyr::filter(value == 1) %>%
+  dplyr::select(-value) %>%
+  dplyr::distinct(target_gene, sample_id, .keep_all = T)
+
+required_clusters <- metadata_RBPs %>% dplyr::pull(experiment_type) %>% unique()
+
+# Parameters of the script
+overwrite_results = F
+
+common_introns_path = here::here("variables/global_common_introns.rds")
+common_novel_path = here::here("variables/global_common_novel.rds")
+
+MSR_A_tests_path <- here::here("variables/MSR_A_tests.rds")
+MSR_D_tests_path <- here::here("variables/MSR_D_tests.rds")
+
+```
+
+## Metadata extraction
+
+Using the [ENCODE REST API](https://www.encodeproject.org/help/rest-api/), we automated the metadata extraction of the different experiments. By setting a series of filters in their [search portal](https://www.encodeproject.org/search/?assay_title=shRNA+RNA-seq&status=released&type=Experiment&target.investigated_as=RNA+binding+protein&replicates.library.biosample.donor.organism.scientific_name=Homo+sapiens), 
+we extracted a total of 170 different target genes of the shRNA knockdown with the previous requirements. As mentioned, only 56 of those were also studied by *Van Nostrand et al.* in his publication.
+
+The relevant metadata of the RBPs studied in this document are the following:
+
+```{r table-metadata, echo = F}
+print_df(metadata_RBPs)
+```
+
+The study of the metadata suggest that all ENCODE experiments were performed identically, and that the samples were extracted from the same two cell lines: [*K562*](https://www.cellosaurus.org/CVCL_0004) and [*HepG2*](https://www.cellosaurus.org/CVCL_0027). As such, all results can be compared between against each other.
+
+For more information about the metadata extraction process, please refer to the corresponding repository: [ENCODE Metadata Extraction](https://github.com/guillermo1996/ENCODE_Metadata_Extraction).
+
+# Methods
+
+## Analysis pipeline
+
+For each RBP, the process is split in several steps:
+
+1. **Download and extraction of `.bam` files**: from the [ENCODE Experiment search portal](https://www.encodeproject.org/search/?type=Experiment&control_type!=*&assay_term_name=shRNA%20knockdown%20followed%20by%20RNA-seq&status=released), the files related to each RBP are automatically downloaded, both case and control samples.
+
+2. **Extraction of the junctions**: from the `.bam` files, all junctions found in samples are grouped together, named and their reads are counted. The generated file is `all_reads_combined.rds`
+
+3. **Junction annotation**: using the `junction_annot()` function from the package `dasper` and the reference transcriptome v105, we identified each junction and classified them as `novel_donor`, `novel_acceptor` or `annotated`. In this step, we also removed the junctions within the ENCODE blacklisted regions v2 and calculated the [MaxEntScan](http://hollywood.mit.edu/burgelab/maxent/Xmaxentscan_scoreseq.html). Two other filters are applied: the removal of reads smaller than 25bp and those annotated introns that are ambiguously assigned to more than one gene. The generated file is `annotated_SR_details.rds`
+
+The following steps were executed on each available cluster (case or control) independently:
+
+4. **Generation of the raw distances**: by looking for overlaps between the `novel` junctions and the `annotated` junctions, we measured the distances in bp (base pairs) between the novel and the reference splice sites. We used this function to associate an annotated intron to a novel junction. This step was executed independently per sample. The generated file is `cluster_distances_raw.rds`
+
+5. **Filtering the distances**: combining all the previous calculated distances by sample, we removed the novel junctions associated to two or more reference introns. The generated file is `cluster_distances_tidy.rds`
+
+6. **Finding the never mis-spliced junctions**: using the raw distances data, we selected the reference introns that are not associated to any novel junction. Even if the association was discarded because of ambiguous junctions, we removed the reference intron from this list. The generated file is `cluster_distances_tidy_all.rds`
+
+7. **Generation of the DB**: with all the previous information, two main tables were created: `db_introns` and `db_novel`. Each one contains the relevant information related to reference introns and novel junctions. This includes the calculation of the percentage of protein-coding transcripts in which each annotated intron was found. The generated files are `cluster_db_introns.rds` and `cluster_db_novel.rds`.
+
+## Finding the common introns {.tabset}
+
+From the generated DBs in every project, we first generated two different tables:
+
+* **Common annotated intron table**: we looped through every `db_introns` table and extracted only the information from the common annotated introns to all projects and clusters. To identify common annotated introns, we used their locus (i.e. seqname:start-end:strand), since it is a unique identifier. The goal was to have the same number of annotated introns per project.
+
+* **Common novel junction table**: we looped through every `db_novel` table and extracted only the information from the novel junctions associated to common annotated introns. Thus, we first needed to calculate the common annotated intron table. Unlike before, we can have a different number of novel junctions per project or cluster.
+
+```{r}
+# Generate a dataframe with only the common introns across all samples
+common_introns <- getCommonIntrons(target_RBPs = target_RBPs,
+                                   RBP_path = RBP_path,
+                                   required_clusters = required_clusters,
+                                   prune_columns = T,
+                                   num_cores = 8,
+                                   file_output = common_introns_path,
+                                   overwrite = F)
+
+# Generate a dataframe with only the novel junctions associated to the common introns.
+common_novel <- getCommonNovel(target_RBPs = target_RBPs,
+                               common_introns,
+                               RBP_path = RBP_path,
+                               required_clusters = required_clusters,
+                               prune_columns = T,
+                               num_cores = 8,
+                               file_output = common_novel_path,
+                               overwrite = F)
+
+rm(global_introns)
+invisible(gc())
+```
+
+# Studied metrics
+
+## MSR Studies {#MSR}
+
+```{r MSR-data, include = F}
+## Generate the MSR tables:
+MSR_Table_Donor <- common_introns %>%
+  dplyr::select(ref_junID, MSR_Donor, MSR_Acceptor, project, cluster) %>%
+  tidyr::pivot_wider(
+    id_cols = ref_junID,
+    names_from = c("project", "cluster"),
+    values_from = c("MSR_Donor")
+  )
+MSR_Table_Acceptor <- common_introns %>%
+  dplyr::select(ref_junID, MSR_Donor, MSR_Acceptor, project, cluster) %>%
+  tidyr::pivot_wider(
+    id_cols = ref_junID,
+    names_from = c("project", "cluster"),
+    values_from = c("MSR_Acceptor")
+  )
+
+## Execute the Wilcox test:
+MSR_Donor_tests <- generateMSRtests(target_RBPs = target_RBPs,
+  cluster_case = "case",
+  cluster_control = "control",
+  MSR_Table = MSR_Table_Donor,
+  num_cores = 16,
+  file_output = MSR_D_tests_path,
+  overwrite = F
+)
+MSR_Acceptor_tests <- generateMSRtests(target_RBPs = target_RBPs,
+  cluster_case = "case",
+  cluster_control = "control",
+  MSR_Table = MSR_Table_Acceptor,
+  num_cores = 16,
+  file_output = MSR_A_tests_path,
+  overwrite = F
+)
+
+## Add the type
+MSR_Donor_tests <- addMSRcategories(MSR_Donor_tests, metadata_RBPs)
+MSR_Acceptor_tests <- addMSRcategories(MSR_Acceptor_tests, metadata_RBPs)
+
+## Add Bonferroni correction
+MSR_Donor_tests <- addBonferroniCorrection(MSR_Donor_tests)
+MSR_Acceptor_tests <- addBonferroniCorrection(MSR_Acceptor_tests)
+
+## Add information
+MSR_Acceptor_tests$statistical_test <- 'Wilcoxon Rank text: rstatix::wilcox_test(data, formula, paired = TRUE, alternative = "greater")'
+MSR_Acceptor_tests$H0 <- "The observations MSR_A_case - MSR_A_control are symmetric about x = 0"
+MSR_Acceptor_tests$H1 <- "The observations MSR_A_case - MSR_A_control are symmetric about x > 0"
+
+MSR_Donor_tests$statistical_test <- 'Wilcoxon Rank text: rstatix::wilcox_test(data, formula, paired = TRUE, alternative = "greater")'
+MSR_Donor_tests$H0 <- "The observations MSR_D_case - MSR_D_control are symmetric about x = 0"
+MSR_Donor_tests$H1 <- "The observations MSR_D_case - MSR_D_control are symmetric about x > 0"
+```
+
+For each annotated intron, two Mis-Splicing Ratios ($MSR$) are calculated to provide a measurement of the mis-splicing frequency at the donor site ($MSR_D$) and acceptor site ($MSR_A$). To calculate these measurements, we first sum all of the novel donor/acceptor junction read counts and then divide by the sum of all annotated intron and novel junction read counts across the specific samples. It follows this formula:
+
+$$
+\begin{equation}
+ MSR_A = \frac{\sum_{i=1}^{N}j_i}{\sum_{i=1}^{N}j_i+\sum_{i=1}^Ns_i }
+\end{equation}
+$$
+where $j$ is the number of novel acceptor junction reads for a particular annotated intron, $s$ is the number of annotated intron reads and $N$ is the number of samples being studied. We can generate an $MSR$ table in which each row corresponds to an annotated intron and each column to a cluster. Example of the generated $MSR_A$ tables:
+
+```{r MSR-table, echo = F}
+MSR_Table_Acceptor[c(1:8, 21, 22), 1:7] %>% 
+  dplyr::mutate(across(where(is.numeric), round, 3)) %>%
+  print_df(style = "md") %>%
+  kableExtra::column_spec(c(2, 4, 6), border_left = T, border_right = F)
+```
+
+Once we have calculated the $MSR_A$ and $MSR_D$ for every annotated intron and every project, we use the paired Wilcoxon signed rank test to study if there is a significant variation in the median $MSR$ in cases vs. controls. To be more precise:
+
+* Null hypothesis (H0): *the observations $MSR_{case} - MSR_{control}$ are symmetric about $\mu$ = 0*.
+* Alternative hypothesis (H1): *the observations $MSR_{case} - MSR_{control}$ are symmetric about $\mu$ > 0* (i.e. the distribution of $MSR_{case} - MSR_{control}$ is greater than 0).
+
+For every project, we will have two *p-values* (one for each splice site) to reject or not the null hypothesis in favor of the alternative hypothesis.
+
+## Annotated intron studies
+
+```{r, common-intron-MSP, echo = F}
+common_introns_misspliced_percentage <- common_introns %>%
+  dplyr::group_by(project, cluster) %>%
+  dplyr::mutate(MSP = 100*(1-(sum(ref_type == "never")/n()))) %>%
+  dplyr::distinct(project, cluster, MSP) %>%
+  tidyr::pivot_wider(id_cols = project,
+                     names_from = cluster,
+                     values_from = MSP) %>%
+  dplyr::mutate(difference = case - control, 
+                type = ifelse(difference > 0, "increase", "decrease"),
+                rMSP = (case/control -1)*100) %>%
+  dplyr::ungroup() %>%
+  dplyr::left_join(metadata_RBPs %>% 
+                     dplyr::select(target_gene, Category) %>% 
+                     dplyr::distinct(),
+                   by = c("project" = "target_gene")) %>%
+  dplyr::relocate(Category, .after = project)
+```
+
+For every project, we define the *MSP* as the number of mis-spliced annotated introns divided by the total number of annotated introns (i.e. the percentage of annotated introns that are found to be misspliced). This metric is calculated for both the control and case samples. 
+
+$$
+\begin{equation}
+ MSP = \frac{\text{# Mis-spliced annotated introns}}{\text{# Annotated introns}}
+\end{equation}
+$$
+
+To do so, we first count the number of annotated introns for each project (this number is the same across all projects) and the number of mis-spliced annotated introns in cases and control. We calculate the *MSP* for each cluster, and extract the difference as $MSP_{case} - MSP_{control}$.
+
+## Novel junctions studies
+
+There are two important statistics that we will study related to novel junctions: the number of unique novel junctions and the number of reads associated to novel junctions.
+
+### Number of unique novel junctions
+
+```{r common-novel-reads, echo = F, eval = T}
+cluster_metadata <- metadata_RBPs %>%
+  dplyr::filter(target_gene %in% (common_novel$project %>% unique())) %>%
+  dplyr::group_by(target_gene, experiment_type, Category) %>%
+  dplyr::summarize(total_counts = sum(read_depth))
+
+common_novel_reads_stats <- common_novel %>%
+  dplyr::group_by(project, cluster, novel_type) %>%
+  dplyr::mutate(total_sum_counts = sum(novel_reads)) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(project, novel_type, cluster, total_sum_counts) %>%
+  dplyr::left_join(cluster_metadata %>% select(target_gene, experiment_type, Category, total_counts),
+                   by = c("project" = "target_gene",
+                          "cluster" = "experiment_type")) %>%
+  dplyr::mutate(percent = total_sum_counts/total_counts * 100) %>%
+  dplyr::group_by(project) %>% add_count(name = "N") %>%
+  dplyr::group_by(cluster, .add = T) %>% add_count(name = "N_cluster") %>%
+  dplyr::group_by(novel_type, .add = T) %>% add_count(name = "n") %>%
+  dplyr::distinct()
+```
+
+For each cluster, we will measure the number of unique novel junctions associated to the common annotated introns. This measurement is calculated for the different splice sites.
+
+We study the variation in the number of unique novel junctions for each project by dividing the number in the case samples by the number in the control sample.
+
+$$
+\begin{equation}
+ \text{Variation in unique novel junctions [%]} = \left(\frac{\text{# Unique novel junction}_{Cerebellum}}{\text{# Unique novel junctions}_{Frontal}}-1\right)*100\%
+\end{equation}
+$$
+
+### Novel junctions reads
+
+To measure the percentage of novel reads, we sum all reads of the novel junctions in a given cluster and divide it by the total number of reads in the cluster. We obtain the percentage of reads that correspond to novel junctions in the cluster. 
+
+$$
+\text{Percentage of novel reads [%]}=\frac{\text{# Novel junction reads}}{\text{# Total reads}} *100\%
+$$
+
+As before, we will divide the case percentage by the control percentage to study the variation between case and control.
+
+$$
+\text{Variation in percentage of novel reads [%]}=\left(\frac{\text{Percentage of novel reads}_{Cerebellum}}{\text{Percenrage of novel reads}_{Frontal}}-1\right)*100\%
+$$
+
+# Results
+
+## MSR Studies {.tabset}
+
+```{r MSR-combination, include = F}
+MSR_combined <- dplyr::bind_rows(
+  MSR_Acceptor_tests %>% dplyr::mutate(MSR_type = "MSR_A"), 
+  MSR_Donor_tests %>% dplyr::mutate(MSR_type = "MSR_D")) %>%
+  dplyr::filter(p.value.bonferroni <= 0.05)
+```
+
+From the results of the paired Wilcoxon ranked test, we keep only those projects in which the null hypothesis can be rejected (i.e. p-value after Bonferroni correction $<= 0.05$). The following tables shows the results for:
+
+* **Donor splice site**:
+
+```{r MSR-Donor, echo = F}
+MSR_combined %>%
+  dplyr::filter(MSR_type == "MSR_D") %>%
+  dplyr::mutate(across(c(effect_size), ~ round(.x, 3))) %>%
+  dplyr::mutate(across(c(p.value.bonferroni), ~ signif(.x, 2))) %>%
+  dplyr::arrange(-effect_size) %>%
+  dplyr::select(Project = target_gene,
+                Category = Category,
+                "p-value" = p.value.bonferroni,
+                "Effect size" = effect_size,
+                Magnitude = magnitude) %>%
+  print_df()
+```
+
+* **Acceptor splice site**:
+
+```{r MSR-Acceptor, echo = F}
+MSR_combined %>%
+  dplyr::filter(MSR_type == "MSR_A") %>%
+  dplyr::mutate(across(c(effect_size), ~ round(.x, 3))) %>%
+  dplyr::mutate(across(c(p.value.bonferroni), ~ signif(.x, 2))) %>%
+  dplyr::arrange(-effect_size) %>%
+  dplyr::select(Project = target_gene,
+                Category = Category,
+                "p-value" = p.value.bonferroni,
+                "Effect size" = effect_size,
+                Magnitude = magnitude) %>%
+  print_df()
+```
+
+From the previous tables, the relevant parameter is the *effect size* of the Wilcoxon paired rank test. It is calculated using the *Z* statistic and the number of annotated introns studied, but it can be directly calculated using the function `rstatix::wilcox_effsize()`. Using the interpretation found [here](https://rpkgs.datanovia.com/rstatix/reference/wilcox_effsize.html), we categorize the effect size in: small, moderate and large. We can graphically represent the effect values for all projects where the null hypothesis of the Wilcoxon signed rank test is rejected.
+
+
+```{r MSR-plot-2, echo = FALSE, fig.width=7.2, fig.height=7.2}
+MSR_plot_dual_path <- here::here("images/Effect_size_combined.png")
+
+ggplot(MSR_combined %>%
+         dplyr::group_by(target_gene) %>%
+         dplyr::mutate(avg_effect_size = mean(effect_size)) %>%
+         dplyr::group_by(Category, MSR_type) %>%
+         dplyr::slice_max(order_by = avg_effect_size, n = 10) %>%
+         dplyr::ungroup() %>%
+         dplyr::arrange(-effect_size) %>%
+         dplyr::mutate(
+           target_gene = factor(target_gene, levels = .$target_gene %>% unique()),
+           Category = factor(Category, levels = Category_levels))) +
+  geom_bar(aes(x = target_gene, y = effect_size, fill = MSR_type),
+           stat = "identity", color = "black", linewidth = 0.25, width = 0.8, position = "dodge") +
+  geom_hline(data = data.frame(hline = c(0.1, 0.3, 0.5)), aes(yintercept = hline), linewidth = 0.25) +
+  viridis::scale_fill_viridis(option = "viridis", discrete = T, begin = 0.20, end = 0.75,
+                              name = "Splice site:",
+                              labels = c("MSR_A" = "Acceptor", "MSR_D" = "Donor"),
+                              guide = guide_legend(reverse = T)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02)),
+                     breaks = seq(0, 0.6, 0.1),
+                     labels = c("0", "Small", "0.2", "Moderate", "0.4", "Large", "0.6")) +
+  scale_x_discrete(expand = expansion(add = c(0.7, 0.7))) +
+  coord_flip() +
+  labs(x = "Target shRNA knockdown gene", y = "Effect size") +
+  #ggtitle("Effect size by sample type and splice site") + 
+  ggforce::facet_col(vars(Category), scales = "free_y", space = "free",
+                     labeller = labeller(Category = Category_labels)) +
+  custom_gg_theme 
+
+ggsave(file = MSR_plot_dual_path, width = 183, height = 228, units = "mm", dpi = 300)
+```
+
+The X-axis represents the effect size while the Y-axis shows the results for each individual in which the median $MSR$ difference was significant. Positive effect sizes represent that the median $MSR$ in the case samples is higher than for the control samples. The colour is used for the splice site, being blue for the acceptor site and green for the donor site.
+
+## Percentage of misspliced annotated introns
+
+If we study now the variation in the percentage of misspliced annotated introns, we obtain the following table:
+
+```{r, MSP-table, echo = F}
+common_introns_misspliced_percentage %>%
+  dplyr::mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+  dplyr::select(-rMSP, -type) %>%
+  dplyr::arrange(-difference) %>%
+  `colnames<-`(c("Target gene", "Category", "MSP case [%]", 
+                 "MSP control [%]", "Difference in MSP [%]")) %>%
+  print_df()
+```
+
+We can also represent the results in the following graph, where the X-axis shows the difference column from the previous table. The Y-axis represents each target gene, divided by functional category.
+
+```{r MSP-plot, echo = F, fig.width = 7.2, fig.height = 12,}
+MSP_plot_path <- here::here("images/Difference_Misspliced_Percentage.png")
+
+ggplot(common_introns_misspliced_percentage %>%
+         dplyr::arrange(-difference, Category) %>%
+         dplyr::mutate(project = factor(project, levels = .$project),
+                       Category = factor(Category, levels = Category_levels)),
+       aes(x = project, y = difference, label = difference, group = Category)) +
+  geom_segment(aes(y = 0, x = project, yend = difference, xend = project), color = "black") +
+  geom_tile(stat = "identity", aes(fill = type), linewidth = 0.5, 
+            colour = "black",  width = 0.75, height = 2.2) +
+  geom_text(aes(label = round(difference, 1)), size = 3) +
+  scale_fill_manual(name="MSP variation",
+                    labels = c("Decrease", "Increase"),
+                    values = c("increase"="#84f954", "decrease"="#ff7d08"),
+                    guide_legend(byrow = TRUE)) +
+  coord_flip() +
+  labs(x = "Target shRNA knockdown gene", y ="Difference in MSP from control to case") +
+  ggtitle("Difference in percentage of misspliced annotated introns",
+          subtitle = "By functional category") +
+  ggforce::facet_col(vars(Category), scales = "free_y", space = "free",
+                     labeller = labeller(Category = Category_labels)) +
+  custom_gg_theme + theme(legend.key = element_blank())
+
+ggsave(file = MSP_plot_path, width = 183, height = 252, units = "mm", dpi = 300)
+```
+
+## Number of unique novel junctions
+
+```{r rNUN-data, echo = F}
+common_novel_unique_number_relative <- common_novel_reads_stats %>%
+  dplyr::ungroup() %>%
+  tidyr::pivot_wider(id_cols = c(project, novel_type, Category),
+                     names_from = cluster,
+                     values_from = n) %>%
+  dplyr::mutate(difference = case - control, 
+                type = ifelse(difference > 0, "increase", "decrease"),
+                rNUN = (case/control -1)*100) %>%
+  dplyr::ungroup()
+```
+
+The results of the variation in the number of unique novel junctions are found in the following table:
+
+```{r rNUN-table, echo = F}
+common_novel_unique_number_relative %>%
+  dplyr::mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+  dplyr::select(-difference, -type, -Category) %>%
+  dplyr::arrange(-rNUN) %>%
+  `colnames<-`(c("Target gene", "Novel type", "# Unique novel junc. case", 
+                 "# Unique novel junc. control", "Variation percent [%]")) %>%
+  print_df()
+```
+
+Results are also shown in the following graph, where the X-axis shows the variation column from the previous table. The Y-axis represents each target gene, divided by cluster (cases and control) and splice site (donor and acceptor).
+
+```{r rNUN-plot, echo = F, fig.width = 7.2, fig.height = 9,}
+rNUN_plot_path <- here::here("images/Variation_Unique_Novel_Junctions.png")
+
+ggplot(common_novel_unique_number_relative %>%
+         dplyr::arrange(-rNUN, Category) %>%
+         dplyr::mutate(project = factor(project, levels = .[.$novel_type == "novel_donor", ]$project),
+                       novel_type = factor(novel_type, levels = c("novel_donor", "novel_acceptor")),
+                       Category = factor(Category, levels = Category_levels)),
+       aes(x = project, y = rNUN, label = rNUN, group = Category)) +
+  geom_segment(aes(y = 0, x = project, yend = rNUN, xend = project), color = "black") +
+  geom_tile(stat = "identity", aes(fill = type), linewidth = 0.5, 
+            colour = "black",  width = 0.75, height = 30) +
+  geom_text(aes(label = round(rNUN, 0), color = Category), size = 2.5) +
+  scale_fill_manual(name="% Unique novel junctions",
+                    labels = c("Decrease", "Increase"),
+                    values = c("increase"="#84f954", "decrease"="#ff7d08"),
+                    guide_legend(byrow = TRUE)) +
+  coord_flip(ylim = c(-40, 180)) +
+  labs(x = "Target shRNA knockdown gene", y ="Variation from control to case [%]") +
+  ggtitle("Variation in % Novel reads",
+          subtitle = "By novel junction type and functional category") +
+  facet_grid(Category ~ novel_type, space = "free", scales = "free_y",
+             labeller = labeller(novel_type = Novel_labels,
+                                 Category = c("Splicing_regulation" = "A",
+                                              "Spliceosome" = "B",
+                                              "NMD" = "C",
+                                              "Exon_junction_complex" = "D"))) +
+  ggnewscale::new_scale_fill() +
+  scale_color_manual(name = "Category",
+                     values = c("black", "black", "black", "black"),
+                     labels = c("Splicing_regulation" = expression(~bold("A")~"  Splicing Regulation"), 
+                                "Spliceosome"= expression(~bold("B")~"  Spliceosome"),
+                                "NMD" = expression(~bold("A")~"  NMD"), 
+                                "Exon_junction_complex"= expression(~bold("B")~"  Exon junction complex")),
+                     guide = guide_legend(order = 1, label.position = "left", 
+                                          label.hjust = 0, keywidth = 0, override.aes = list(alpha = 0))) +
+  custom_gg_theme + theme(strip.text.y = element_text(color = "black", face = "bold", size = 13, angle = 0), 
+                         legend.position = "right",
+                         legend.key = element_blank())
+
+ggsave(file = rNUN_plot_path, width = 183, height = 252, units = "mm", dpi = 300)
+```
+
+**IMPORTANT:** The novel acceptor value for target gene *AQR* cannot be represented in the same axis as the other target genes. The value goes to `r common_novel_unique_number_relative %>% filter(project == "AQR" & novel_type == "novel_acceptor") %>% pull(rNUN) %>% round()`% increase.
+
+## Number of reads of novel junctions
+
+```{r rNRP-data, echo = F}
+common_novel_reads_stats_relative <- common_novel_reads_stats %>%
+  dplyr::ungroup() %>%
+  tidyr::pivot_wider(id_cols = c(project, novel_type, Category),
+                     names_from = cluster,
+                     values_from = percent) %>%
+  dplyr::mutate(difference = case - control, 
+                type = ifelse(difference > 0, "increase", "decrease"),
+                rNRP = (case/control -1)*100) %>%
+  dplyr::ungroup()
+```
+
+The results of the variation in the percentage of novel reads are found in the following table:
+
+```{r rNRP-table, echo = F}
+common_novel_reads_stats_relative %>%
+  dplyr::mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+  dplyr::select(-difference, -type, -Category) %>%
+  dplyr::arrange(-rNRP) %>%
+  `colnames<-`(c("Target gene", "Novel type", "Novel junction reads case [%]", 
+                 "Novel junction reads control[%]", "Variation percantage [%]")) %>%
+  print_df()
+```
+
+Results are also shown in the following graph, where the X-axis shows the variation column from the previous table. The Y-axis represents each target gene, divided by fuctional category and splice site (donor and acceptor).
+
+```{r rNRP-plot, echo = F, fig.width = 7.2, fig.height = 9}
+rNRP_plot_path <- "images/Variation_Novel_Reads_Percentage.png"
+
+  
+ggplot(common_novel_reads_stats_relative %>%
+         dplyr::arrange(-rNRP, Category) %>%
+         dplyr::mutate(project = factor(project, levels = .[.$novel_type == "novel_donor", ]$project),
+                       novel_type = factor(novel_type, levels = c("novel_donor", "novel_acceptor")),
+                       Category = factor(Category, levels = Category_levels)),
+       aes(x = project, y = rNRP, label = rNRP, group = Category)) +
+  geom_segment(aes(y = 0, x = project, yend = rNRP, xend = project), color = "black") +
+  geom_tile(stat = "identity", aes(fill = type), linewidth = 0.5, 
+            colour = "black",  width = 0.75, height = 30) +
+  geom_text(aes(label = round(rNRP, 0), color = Category), size = 2.5) +
+  scale_fill_manual(name="% Novel reads",
+                    labels = c("Decrease", "Increase"),
+                    values = c("increase"="#84f954", "decrease"="#ff7d08"),
+                    guide_legend(byrow = TRUE)) +
+  coord_flip(ylim = c(-50, 150)) +
+  labs(x = "Target shRNA knockdown gene", y ="Variation from control to case [%]") +
+  ggtitle("Variation in % Novel reads",
+          subtitle = "By novel junction type and functional category") +
+  facet_grid(Category ~ novel_type, space = "free", scales = "free_y",
+             labeller = labeller(novel_type = Novel_labels,
+                                 Category = c("Splicing_regulation" = "A",
+                                              "Spliceosome" = "B",
+                                              "NMD" = "C",
+                                              "Exon_junction_complex" = "D"))) +
+  ggnewscale::new_scale_fill() +
+  scale_color_manual(name = "Category",
+                     values = c("black", "black", "black", "black"),
+                     labels = c("Splicing_regulation" = expression(~bold("A")~"  Splicing Regulation"), 
+                                "Spliceosome"= expression(~bold("B")~"  Spliceosome"),
+                                "NMD" = expression(~bold("A")~"  NMD"), 
+                                "Exon_junction_complex"= expression(~bold("B")~"  Exon junction complex")),
+                     guide = guide_legend(order = 1, label.position = "left", 
+                                          label.hjust = 0, keywidth = 0, override.aes = list(alpha = 0))) +
+  custom_gg_theme + theme(strip.text.y = element_text(color = "black", face = "bold", size = 13, angle = 0), 
+                         legend.position = "right",
+                         legend.key = element_blank())
+
+ggsave(file = rNRP_plot_path, width = 183, height = 254, units = "mm", dpi = 300)
+```
+
+# Session info
+
+<details>
+  <summary>Show/hide</summary>
+
+```{r reproducibility, echo = FALSE}
+# Session info
+library("sessioninfo")
+options(width = 120)
+session_info()
+```
+
+</details>
