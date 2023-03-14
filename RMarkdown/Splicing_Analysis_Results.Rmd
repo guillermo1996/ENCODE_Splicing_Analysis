@@ -139,6 +139,18 @@ cat('
 .code-folding-btn {
   display: none;
 }
+h3, .h3 {
+  font-size: 22px!important;
+}
+h4, .h4 {
+  font-size: 18px!important;
+}
+h5, .h5 {
+  font-size: 16px!important;
+}
+body{
+  font-size: 13px;
+}
 </style>')
 }
 ```
@@ -195,7 +207,6 @@ common_novel_path = here::here("variables/global_common_novel.rds")
 
 MSR_A_tests_path <- here::here("variables/MSR_A_tests.rds")
 MSR_D_tests_path <- here::here("variables/MSR_D_tests.rds")
-
 ```
 
 ## Metadata extraction
@@ -263,7 +274,6 @@ common_novel <- getCommonNovel(target_RBPs = target_RBPs,
                                file_output = common_novel_path,
                                overwrite = F)
 
-rm(global_introns)
 invisible(gc())
 ```
 
@@ -552,8 +562,8 @@ ggplot(common_introns_misspliced_percentage %>%
                      labeller = labeller(Category = Category_labels)) +
   custom_gg_theme + theme(legend.key = element_blank())
 
-# MSP_plot_path <- here::here("images/Difference_Misspliced_Percentage.png")
-# ggsave(file = MSP_plot_path, width = 183, height = 252, units = "mm", dpi = 300)
+#MSP_plot_path <- here::here("images/Difference_Misspliced_Percentage.png")
+#ggsave(file = MSP_plot_path, width = 183, height = 183*12/7.2, units = "mm", dpi = 300)
 ```
 
 ## Number of unique novel junctions

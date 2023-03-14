@@ -1,0 +1,794 @@
+---
+title: "RBP Result"
+output: 
+  html_document:
+    number_sections: true
+---
+
+```{r eval = F, include = FALSE}
+example_project = "ADAR"
+base_level = 1
+knit_output = "html"
+knitr::opts_chunk$set(echo = F, warning = F, message = F, out.width="85%", fig.align = "center", dpi = 100)
+
+# Libraries
+shhh <- suppressPackageStartupMessages
+shhh(library(patchwork))
+shhh(library(ggnewscale))
+shhh(library(here))
+shhh(library(GenomicRanges))
+shhh(library(doParallel))
+shhh(library(foreach))
+shhh(library(tidyverse))
+options(dplyr.summarise.inform = FALSE)
+options(lifecycle_verbosity = "warning")
+options(scipen=999)
+
+source(here::here("Helper_Functions/hf_Analysis.R"))
+
+# Data location
+RBP_path <- here::here("RBPs/")
+metadata_path <- here::here("Metadata/metadata_complete.tsv")
+
+# Loading the metadata
+metadata <- readr::read_delim(metadata_path, show_col_types = F)
+
+target_RBPs <- metadata %>% 
+  dplyr::filter(if_any(c(Splicing_regulation, Spliceosome, Exon_junction_complex, NMD), ~ . != 0)) %>%
+  dplyr::pull(target_gene) %>%
+  unique()
+
+metadata_RBPs <- metadata %>% 
+  dplyr::filter(target_gene %in% target_RBPs) %>%
+  tidyr::pivot_longer(c("Splicing_regulation", "Spliceosome", "Exon_junction_complex", "NMD"), 
+                      names_to = "Category") %>%
+  dplyr::filter(value == 1) %>%
+  dplyr::select(-value) %>%
+  dplyr::distinct(target_gene, sample_id, .keep_all = T)
+
+RBP_metadata <- metadata_RBPs %>%
+  dplyr::filter(target_gene == example_project)
+
+required_clusters <- metadata_RBPs %>% dplyr::pull(experiment_type) %>% unique()
+
+# Parameters of the script
+common_introns_path <- here::here("variables/global_common_introns.rds")
+common_novel_path <- here::here("variables/global_common_novel.rds")
+common_novel_MES_path <- here::here("variables/global_common_novel_MES.rds")
+
+## Load the data
+common_introns <- getCommonIntrons(target_RBPs = target_RBPs,
+                                   RBP_path = RBP_path,
+                                   required_clusters = required_clusters,
+                                   prune_columns = T,
+                                   num_cores = 8,
+                                   file_output = common_introns_path,
+                                   overwrite = F)
+common_novel <- getCommonNovel(target_RBPs = target_RBPs,
+                               common_introns,
+                               RBP_path = RBP_path,
+                               required_clusters = required_clusters,
+                               prune_columns = T,
+                               num_cores = 8,
+                               file_output = common_novel_path,
+                               overwrite = F)
+if(!file.exists(common_novel_MES_path)){
+  annotated_SR_details <- readRDS(paste0(RBP_path, "annotated_SR_details.rds"))
+  common_novel_MES <- common_novel %>%
+    #dplyr::filter(project == example_project) %>%
+    dplyr::left_join(annotated_SR_details %>% select(junID, ss3score, ss5score),
+                     by = c("novel_junID" = "junID")) %>%
+    dplyr::rename(novel_ss3score = ss3score,
+                  novel_ss5score = ss5score) %>%
+    dplyr::left_join(annotated_SR_details %>% select(junID, ss3score, ss5score),
+                     by = c("ref_junID" = "junID")) %>%
+    dplyr::rename(ref_ss3score = ss3score,
+                  ref_ss5score = ss5score) %>%
+    dplyr::mutate(delta_ss5score = ref_ss5score - novel_ss5score,
+                  delta_ss3score = ref_ss3score - novel_ss3score)
+  
+  common_novel_MES %>% saveRDS(common_novel_MES_path)
+}else{
+  common_novel_MES <- readRDS(common_novel_MES_path)
+}
+invisible(gc())
+
+project_introns <- common_introns %>%
+  dplyr::filter(project == example_project)
+  
+project_novel <- common_novel_MES %>%
+  dplyr::filter(project == example_project)
+
+## Theme
+custom_gg_theme <- theme(
+  plot.title = element_text(size = 17, face = "bold"),
+  panel.border = ggplot2::element_rect(colour = "black", fill = NA, linewidth = 1),
+  axis.text.x = ggplot2::element_text(color = "black", size = 8, angle = 0, hjust = 0.5),
+  axis.text.y = ggplot2::element_text(color = "black", size = 8),
+  axis.title.x = ggplot2::element_text(face = "bold", size = 11, margin = margin(5, 0, 0, 0)),
+  axis.title.y = ggplot2::element_text(face = "bold", size = 11, margin = margin(0, 10, 0, 0)),
+  panel.grid.minor = element_line(color = "#444444", linewidth = 0.05, linetype = 2),
+  panel.grid.major.y = element_line(color = "#444444", linewidth = 0.05, linetype = 2),
+  panel.grid.major.x = element_line(color = "#444444", linewidth = 0.1),
+  panel.background = element_rect(fill = "#FBFBFB"),
+  legend.title = element_text(size = 12),
+  legend.text = element_text(size = 10),
+  legend.position = "top",
+  legend.key = element_rect(color = "black"),
+  legend.key.size = unit(1, "lines"),
+  strip.text.x = element_text(color = "black", face = "bold", size = 9),
+  strip.background = element_rect(color = "black", linewidth = 1, linetype = "solid"),
+  strip.text.y = element_text(color = "black", face = "bold", size = 9),
+  plot.margin = margin(0.5, 0.5, 0.2, 0.5, "cm")
+)
+
+custom_gg_theme_subtitle <- custom_gg_theme + 
+  theme(plot.subtitle=element_text(size=13, vjust = 1, color="black", margin = margin(b = 0, t = -5)),
+        legend.margin=margin(b = -5))
+
+cluster_labels <- c("case" = "Case", "control" = "Control")
+novel_labels <- c("novel_donor" = "Novel Donor", "novel_acceptor" = "Novel Acceptor")
+novel_mini_labels <- c("donor" = "Novel Donor", "acceptor" = "Novel Acceptor")
+sequence_labels <- c("acceptor exon" = "Acceptor exon",
+                     "acceptor intron" = "Acceptor intron",
+                     "donor exon" = "Donor exon",
+                     "donor intron" = "Donor intron")
+delta_MES_labels <- c("delta MES 5'ss" = "Delta MES 5'ss", "delta MES 3'ss" = "Delta MES 3'ss")
+```
+
+```{r include = F}
+## Functions to run Rmd template properly
+library(glue)
+sprintf_transformer <- function(text, envir) {
+  m <- regexpr(":.+$", text)
+  if (m != -1) {
+    format <- substring(regmatches(text, m), 2)
+    regmatches(text, m) <- ""
+    res <- eval(parse(text = text, keep.source = FALSE), envir)
+    do.call(sprintf, list(glue("%{format}"), res))
+  } else {
+    eval(parse(text = text, keep.source = FALSE), envir)
+  }
+}
+glue_fmt <- function(..., .envir = parent.frame()) {
+  glue(..., .transformer = sprintf_transformer, .envir = .envir)
+}
+
+addTitles <- function(base_level, element_level){
+  return(strrep("#", base_level + element_level))
+}
+
+print_df <- function(x, 
+                     style = "html", 
+                     limit = NULL, random = F, seed = NULL,
+                     order = list(), autoWidth = FALSE, pageLength = 10, rownames = FALSE, compact = T,
+                     full_width = F){
+  if(style == "html"){
+    dt_class = "display cell-border nowrap"
+    if(compact) dt_class = paste0(dt_class, " compact")
+    DT::datatable(x,
+                  options = list(scrollX = TRUE,
+                                 autoWidth = autoWidth,
+                                 pageLength = pageLength,
+                                 order = order),
+                  class = dt_class,
+                  rownames = rownames)
+  }else{
+    if(length(order) != 0){
+      if(order[[2]] == "desc"){
+        x <- x %>% dplyr::arrange(desc(.[[order[[1]]+1]]))
+      }else{
+        x <- x %>% dplyr::arrange(.[[order[[1]]+1]])
+      }
+    }
+    
+    if(!is.null(limit)){
+      if(random){
+        if(!is.null(seed)) set.seed(seed)
+        x <- x %>% .[sample(1:nrow(.), limit), ]
+      }else{
+        x <- x %>% .[1:limit, ]
+      }
+    }
+    
+    x %>%
+      kableExtra::kbl(booktabs = T, linesep = "") %>%
+      kableExtra::kable_classic(full_width = full_width, "hover", "striped", html_font = "Cambria", font_size = 14) %>%
+      kableExtra::row_spec(0, bold = T, font_size = 16)
+  }
+}
+```
+
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 1), " ", example_project, " {.tabset #", example_project," -}", sep = "")
+```
+ENCODE experiment summary:
+
+<details>
+<summary>Click for details</summary>
+Information:
+
+  * Target: `r example_project`
+  * Category: `r metadata_RBPs %>% filter(target_gene == example_project) %>% distinct(target_gene, .keep_all = T) %>% pull(Category)`
+  * Assay: shRNA knockdown followed by RNA-seq
+  * Nucleic acid type: polyadenylated mRNA
+  * Lab: Brenton Gravely, UConn
+
+Samples analysed:
+
+```{r results = "asis", echo = FALSE}
+for(cluster in required_clusters){
+  cluster_metadata <- RBP_metadata %>% filter(experiment_type == cluster)
+  cluster_cell_lines <- cluster_metadata %>% pull(cell_line) %>% unique
+  
+  cat("\n * ", nrow(cluster_metadata), cluster, "samples:")
+  
+  for(c_cell_line in cluster_cell_lines){
+    cell_line_metadata <- cluster_metadata %>% filter(cell_line == c_cell_line)
+    age_group = cell_line_metadata$life_stage %>% unique
+    age = cell_line_metadata$age %>% unique
+    rep <- cell_line_metadata$bio_rep %>% unique %>% length
+    experiment_id <- cell_line_metadata$experiment_id %>% unique
+    
+    RIN <- cell_line_metadata$rin %>% unique
+    if(length(RIN) == 1){
+      RIN_text <- RIN
+    }else{
+      RIN_text <- gsub("_", "-", paste(apply(cell_line_metadata, 1, function(x) paste0(x["rin"]," [", x["tech_rep"], "]")), collapse =", "))
+    }
+    
+    cat("\n\t * ", nrow(cell_line_metadata), 
+        " samples from [", c_cell_line, 
+        "](https://www.encodeproject.org/experiments/", experiment_id, "/) cell lines (", age_group, ", ", age, 
+        "), with ", rep, " isogenic replicates; RIN ", 
+        RIN_text, sep = "")
+  }
+  #cat(sprintf(paste0("\t* ", nrow(cluster_metadata), " ", cluster, " samples:\n")))
+}
+```
+</details>
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 2), " Distances (N) {-}\n", sep = "")
+```
+
+
+```{r echo=FALSE, message=F, warning = F, fig.width=7.2, fig.height = 5.5}
+limit_bp = 30
+ggplot(common_novel %>% 
+         dplyr::filter(project == example_project) %>%
+         dplyr::mutate(novel_type = factor(novel_type, levels = c("novel_donor", "novel_acceptor")))) + 
+  geom_histogram(aes(x = distance, fill = cluster),
+                 bins = 60, binwidth = 1, position = "stack", alpha = 1,
+                 color = "black", linewidth = 0.1) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0)), 
+                     limits = c((limit_bp * -1), limit_bp), 
+                     breaks = seq(-limit_bp, limit_bp, length.out = 5)) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75,
+                              name = "", labels = cluster_labels) + 
+  labs(x = "Distance", y = "Number of unique novel junctions") + 
+  ggtitle(paste0("Distance to the annotated intron"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  ggforce::facet_col(vars(novel_type),
+                     labeller = labeller(novel_type = novel_labels)) + 
+  custom_gg_theme_subtitle
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance between the novel splice site and the reference splice site.
+* Y-Axis: Number of unique novel junctions. Bars are stacked.
+* Colour: Cluster type as case vs. control.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor).
+</details>
+
+---
+
+```{r echo=FALSE, message=F, warning = F, fig.width=7.2, fig.height=4}
+limit_bp = 30
+ggplot(common_novel %>% 
+         dplyr::filter(project == example_project) %>%
+         dplyr::mutate(novel_type = factor(novel_type, levels = c("novel_donor", "novel_acceptor")))) + 
+  geom_histogram(aes(x = distance, fill = cluster),
+                 bins = 60, binwidth = 1, position = "stack", alpha = 1,
+                 color = "black", linewidth = 0.1) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0)), 
+                     limits = c((limit_bp * -1), limit_bp), 
+                     breaks = seq(-limit_bp, limit_bp, length.out = 5)) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75,
+                              name = "", labels = cluster_labels) + 
+  labs(x = "Distance", y = "Number of unique novel junctions") + 
+  ggtitle(paste0("Distance to the annotated intron"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  facet_grid(novel_type ~ cluster, scales = "free_y",
+             labeller = labeller(novel_type = novel_labels,
+                                 cluster = cluster_labels)) + 
+  custom_gg_theme_subtitle + theme(panel.spacing.x = unit(1, "lines"))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance between the novel splice site and the reference splice site.
+* Y-Axis: Number of unique novel junctions.
+* Colour: Cluster type as case vs. control.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor) and cluster (same as colour).
+</details>
+
+---
+
+```{r echo = FALSE, warning=F, fig.width=7.2, fig.height=5.5}
+limit_bp = 30
+common_novel %>%
+  dplyr::filter(project == example_project) %>%
+  dplyr::filter(abs(distance) <= 1.1*limit_bp) %>%
+  dplyr::group_by(novel_type, distance, cluster) %>%
+  dplyr::count() %>%
+  tidyr::pivot_wider(id_cols = c("novel_type", "distance"), names_from = "cluster", values_from = "n") %>%
+  dplyr::mutate(case = replace_na(case, 0),
+                control = replace_na(control, 0)) %>%
+  dplyr::mutate(diff = case - control,
+                novel_type = factor(novel_type, levels = c("novel_donor", "novel_acceptor"))) %>%
+  ggplot() + 
+  geom_histogram(aes(x = distance, y = diff, fill = "fill_color"), 
+                 stat = "identity", color = "black", linewidth = 0.2, width = 1,
+                 bins = 60, binwidth = 1) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0)), 
+                     limits = c((limit_bp * -1), limit_bp), 
+                     breaks = seq(-limit_bp, limit_bp, length.out = 5)) + 
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  scale_fill_manual(name = "",
+                    values = c("fill_color" = "#4394fd"),
+                    labels = c("Case - Control"),
+                    guide = guide_legend(override.aes = list(linewidth = .25))) +
+  labs(x = "Distance", y = "Number of unique novel junctions") + 
+  ggtitle(paste0("Distance difference to the annotated intron"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  ggforce::facet_col(vars(novel_type), 
+                     labeller = labeller(novel_type = novel_labels)) +
+  custom_gg_theme_subtitle
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance between the novel splice site and the reference splice site.
+* Y-Axis: Difference between the number of unique novel junctions from case samples and from control samples.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor).
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 2), " Modulo 3 {.tabset -}\n", sep = "")
+```
+
+```{r echo = FALSE, fig.width=7.2, fig.height=5.5}
+limit_bp = 30
+
+modulo_df <- common_novel %>%
+  dplyr::filter(project == example_project) %>%
+  dplyr::filter(abs(distance) <= 100) %>%
+  tidyr::separate(novel_type, c("novel", "novel_type")) %>%
+  dplyr::mutate(modulo = abs(distance) %% 3,
+                sequence = ifelse(distance < 0, "intron", "exon"),
+                novel_type = factor(novel_type, levels = c("donor", "acceptor"))) %>%
+  dplyr::select(cluster, novel_type, sequence, distance, modulo)
+
+ggplot(modulo_df) +
+  geom_bar(aes(x = modulo, fill = cluster), stat = "count",
+           position = "dodge", color = "black", linewidth = 0.5) +
+  ggrepel::geom_text_repel(aes(x = modulo, label = ..count.., group = cluster), stat = "count",
+                           size = 4.2, color = "white", bg.color = "black", bg.r = .1, fontface = "bold",
+                           vjust = 1.5, position = position_dodge(width = 0.9), force = 5) +
+  scale_x_continuous(limits = c(-0.5, 2.5), breaks = c(0, 1, 2), expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75,
+                              name = "", labels = cluster_labels) +
+  labs(x = "Modulo 3 of the distance", y = "Number of unique novel junctions") + 
+  ggtitle(paste0("Mod.3 distance to the annotated intron"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  ggforce::facet_col(vars(novel_type), 
+                     labeller = labeller(novel_type = novel_mini_labels)) +
+  custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = 0.10))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance in modulo 3 between the novel splice site and the reference splice site. Filtered by $distance\leq 100\;bp$.
+* Y-Axis: Number of unique novel junctions. Also represented as the text inside the bars.
+* Colour: Cluster type as case vs. control.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor).
+</details>
+
+---
+
+```{r echo = FALSE, fig.width=7.2, fig.height=5.5}
+limit_bp = 30
+
+modulo_group_df <- modulo_df %>%
+  dplyr::group_by(cluster, novel_type, modulo) %>% 
+  dplyr::summarise(n = n()) %>%
+  dplyr::mutate(freq = (n / sum(n) * 100))
+
+ggplot(modulo_group_df) +
+  geom_bar(aes(x = modulo, y = freq, fill = cluster), stat = "identity",
+           position = "dodge", color = "black", linewidth = 0.5) +
+  ggrepel::geom_text_repel(aes(x = modulo, y = freq, label = paste0(round(freq, 1), " %"), group = cluster),
+                           size = 4.2, color = "white", bg.color = "black", bg.r = .1, fontface = "bold",
+                           vjust = 1.5, position = position_dodge(width = 0.9), force = 5) +
+  scale_x_continuous(limits = c(-0.5, 2.5), breaks = c(0, 1, 2), expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75,
+                              name = "", labels = cluster_labels) +
+  labs(x = "Modulo 3 of the distance", y = "Percentage of novel junctions") + 
+  ggtitle(paste0("Mod.3 Percentages: Cluster and Splice site"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  ggforce::facet_col(vars(novel_type), 
+                     labeller = labeller(novel_type = novel_mini_labels)) +
+  custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = 0.10))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance in modulo 3 between the novel splice site and the reference splice site. Filtered by $distance\leq 100\;bp$.
+* Y-Axis: Percentage of each modulo 3 value with respect to cluster (case and control) and novel type (donor and acceptor).
+* Colour: Cluster type as case vs. control.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor).
+</details>
+
+---
+
+```{r echo = FALSE, fig.width=7.2, fig.height=3}
+limit_bp = 30
+
+modulo_group_sequence_df <- modulo_df %>%
+  dplyr::mutate(sequence_type = paste(novel_type, sequence)) %>%
+  dplyr::group_by(cluster, sequence_type, modulo) %>% 
+  dplyr::summarise(n = n()) %>%
+  dplyr::mutate(freq = (n / sum(n) * 100)) %>%
+  dplyr::arrange(desc(sequence_type)) %>%
+  dplyr::mutate(sequence_type = factor(sequence_type, levels = .$sequence_type %>% unique))
+
+ggplot(modulo_group_sequence_df) +
+  geom_bar(aes(x = modulo, y = freq, fill = cluster), stat = "identity",
+           position = "dodge", color = "black", linewidth = 0.3) +
+  scale_x_continuous(breaks = c(0, 1, 2), expand = c(0, 0.2)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75,
+                              name = "", labels = cluster_labels) +
+  labs(x = "Modulo 3 of the distance", y = "Percentage of novel junctions") + 
+  ggtitle(paste0("Mod.3 Percentages: Cluster, Splice site and Sequence"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+  ggforce::facet_row(vars(sequence_type), 
+                     labeller = labeller(sequence_type = sequence_labels)) +
+  custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = 0.10),
+                                   axis.title.y = element_text(size = 9))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Distance in modulo 3 between the novel splice site and the reference splice site. Filtered by $distance\leq 100\;bp$.
+* Y-Axis: Percentage of each modulo 3 value with respect to cluster (case and control), novel type (donor and acceptor) and sequence (intronic and exonic).
+* Colour: Cluster type as case vs. control.
+* Facets: Novel junction category (Novel donor vs. Novel acceptor) and sequence (intronic vs. exonic).
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 2), " Delta MaxEntScan {.tabset -}\n", sep = "")
+```
+
+```{r echo=FALSE, message=F, warning = F, fig.height=4.5, fig.width=7.2}
+delta_MES <- common_novel_MES %>%
+  dplyr::filter(project == example_project) %>%
+  tidyr::pivot_longer(c(delta_ss5score, delta_ss3score), names_to = "delta_type", values_to = "delta") %>%
+  dplyr::filter(delta != 0) %>%
+  dplyr::mutate(delta_type = ifelse(delta_type == "delta_ss5score", "delta MES 5'ss", "delta MES 3'ss")) %>%
+  dplyr::mutate(delta_type = delta_type %>% as.factor()) %>%
+  dplyr::mutate(delta_type = relevel(delta_type, ref = "delta MES 5'ss"))
+
+
+ggplot(delta_MES) +
+  geom_density(aes(x = delta, fill = cluster), alpha = 0.6, linewidth = 0.3, adjust = 1) +
+  geom_vline(xintercept = 0) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75, name = "",
+                              labels = cluster_labels) +
+  labs(x = "Delta MaxEntScan score", y = "Density") +
+  ggtitle(paste0("Delta MaxEntScan scores"),
+          subtitle = paste0("Target gene: ", example_project)) +
+  ggforce::facet_col(vars(delta_type),
+                     labeller = labeller(delta_type = delta_MES_labels)) +
+  custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = .05))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Difference between the MaxEntScan score of the reference annotated intron and the novel junction.
+* Y-Axis: Kernel density estimate (smoothed version of a histogram).
+* Colour: Cluster type as case vs. control.
+* Facets: Different splice sites.
+</details>
+
+---
+
+```{r echo=FALSE, message=F, warning = F, fig.height=4.5, fig.width=7.2}
+densities_5 <- delta_MES %>%
+  dplyr::filter(delta_type == "delta MES 5'ss") %>%
+  dplyr::group_by(cluster, delta_type) %>%
+  dplyr::summarise(d = list(density(delta, from = min(.$delta), to = max(.$delta))))
+densities_3 <- delta_MES %>%
+  dplyr::filter(delta_type == "delta MES 3'ss") %>%
+  dplyr::group_by(cluster, delta_type) %>%
+  dplyr::summarise(d = list(density(delta, from = min(.$delta), to = max(.$delta))))
+
+delta_5 <- tibble::tibble(x = densities_5$d[[1]]$x,
+                          y = densities_5$d[[1]]$y - densities_5$d[[2]]$y)
+delta_3 <- tibble::tibble(x = densities_3$d[[1]]$x,
+                          y = densities_3$d[[1]]$y - densities_3$d[[2]]$y)
+delta_df <- rbind(delta_5 %>% dplyr::mutate(delta_type = "delta MES 5'ss"),
+                  delta_3 %>% dplyr::mutate(delta_type = "delta MES 3'ss")) %>%
+  dplyr::arrange(desc(delta_type)) %>%
+  dplyr::mutate(delta_type = factor(delta_type, levels = c("delta MES 5'ss", "delta MES 3'ss")))
+
+ggplot(delta_df) +
+  geom_area(aes(x = x, y = y, fill = "fill_color"), position = "identity") +
+  scale_fill_manual(name = "",
+                    values = c("fill_color" = "#619cff"),
+                    labels = c("Case - Control"),
+                    guide = guide_legend(override.aes = list(linewidth = .25))) +
+  geom_line(aes(x = x, y = y)) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  labs(x = "Delta MaxEntScan score", y = "Density") +
+  ggtitle(paste0("Delta MaxEntScan scores"),
+          subtitle = paste0("Target gene: ", example_project)) +
+  ggforce::facet_col(vars(delta_type),
+                     labeller = labeller(delta_type = delta_MES_labels)) +
+  custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = 0.75))
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: Difference between the MaxEntScan score of the reference annotated intron and the novel junction.
+* Y-Axis: Difference between the kernel density estimate for case samples and control samples.
+* Colour: Cluster type as case vs. control.
+* Facets: Different splice sites.
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 2), " MSR {.tabset -}\n", sep = "")
+```
+
+```{r echo = F}
+suppressWarnings(suppressMessages(library(scales)))
+magnify_trans <- function(intercept, reducer) {
+    trans <- function(x, i = intercept, r = reducer) {
+        sapply(x, function(x) {
+            if (x < i) x
+            else x / r + i
+        }) %>% as.numeric()
+    }
+    
+    inv <- function(x, i = intercept, r = reducer) {
+        sapply(x, function(x) {
+            if(!is.na(x)) {
+                if (x < i) x
+                else (x - i) * r
+            }
+        }) %>% as.numeric()
+    }
+    trans_new(name = 'custom',
+              transform = trans,
+              inverse = inv
+              )
+}
+
+plotMSR_2breaks <- function(df_tidy, MSR, MSR_density = NULL, title, type){
+  round_any = function(x, accuracy, f=round){f(x/ accuracy) * accuracy}
+  
+  add_y_break <- function(plot, yval, n = 5) {
+    p2 <- ggplot_build(plot)
+    breaks <- p2$layout$panel_params[[1]]$y$breaks
+    breaks <- breaks[!is.na(breaks)]
+    
+    plot +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.05)), breaks = round(sort(c(breaks, seq(0, yval, length.out = n)))))
+  }
+  
+  if(missing(MSR_density)){
+      densities <- df_tidy %>% 
+      pivot_longer(cols = c("MSR_D", "MSR_A"), names_to = "MSR_type", values_to = "MSR") %>%
+      group_by(MSR_type, cluster) %>% 
+      summarise(d = list(density(MSR, from = min(.$MSR), to = max(.$MSR)))) %>%
+      rowwise() %>%
+      mutate(max = d$y %>% max) %>%
+      ungroup()
+    
+    MSR_density <- max_density %>% filter(MSR_type == MSR) %>% select(cluster, max) %>% deframe
+  }
+  
+  p <- ggplot(MSR_df) + 
+    geom_density(aes(x = !!sym(MSR), fill = cluster), alpha = 0.5) +
+    viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75, name = "",
+                                labels = cluster_labels) +
+    coord_trans(x = magnify_trans(intercept = 0.05, reducer = 50),
+                y = magnify_trans(intercept = round_any(min(MSR_density), 100, f = ceiling), 
+                                  reducer = 2*(max(MSR_density)-min(MSR_density))/min(MSR_density))) +
+    geom_vline(xintercept = 0.05, linetype = 2, linewidth = 1) + 
+    geom_hline(yintercept = round_any(min(MSR_density), 100, f = ceiling), linetype = 2, linewidth = 1) + 
+    scale_x_continuous(breaks = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.2, 0.4, 0.6, 0.8, 1.0), 
+                       expand = expansion(mult = c(0.0, 0.02)), limits = c(0, 1)) +
+    labs(x = paste0("Mis-splicing ratio (", MSR, ")"), y = "Density") + 
+    ggtitle(paste0("Mis-splicing ratio at ", title, " site"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+    custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = .05))
+  
+  add_y_break(p, round_any(min(MSR_density), 100, f = ceiling))
+}
+
+plotMSR_1break <- function(MSR_df, MSR, title){
+  ggplot(MSR_df) + 
+    geom_density(aes(x = !!sym(MSR), fill = cluster), alpha = 0.5) +
+    viridis::scale_fill_viridis(discrete = T, begin = 0.15, end = 0.75, name = "",
+                                labels = cluster_labels) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+    coord_trans(x = magnify_trans(intercept = 0.05, reducer = 50)) +
+    geom_vline(aes(xintercept = 0.05), linetype = 2, linewidth = 1) + 
+    scale_x_continuous(breaks = c(0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.2, 0.4, 0.6, 0.8, 1.0), 
+                       expand = expansion(mult = c(0.0, 0.02)), limits = c(0, 1)) +
+    labs(x = paste0("Mis-splicing ratio (", MSR, ")"), y = "Density") + 
+    ggtitle(paste0("Mis-splicing ratio at ", title, " site"),
+          subtitle = paste0("Target gene: ", example_project)) + 
+    custom_gg_theme_subtitle + theme(legend.key = element_rect(color = "black", linewidth = .05))
+}
+```
+
+```{r echo = F, message=F, warning = F, fig.height=4.5, fig.width=7.2}
+MSR_df <- common_introns %>%
+  dplyr::filter(project == example_project)
+
+MSR_densities <- MSR_df %>%
+  tidyr::pivot_longer(cols = c("MSR_Donor", "MSR_Acceptor"), names_to = "MSR_type", values_to = "MSR") %>%
+  dplyr::group_by(MSR_type, cluster) %>% 
+  dplyr::summarise(d = list(density(MSR, from = min(.$MSR), to = max(.$MSR)))) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(max = d$y %>% max) %>%
+  dplyr::ungroup()
+
+for(MSR in c("MSR_Donor", "MSR_Acceptor")){
+  MSR_density <- MSR_densities %>% 
+    dplyr::filter(MSR_type == MSR) %>%
+    dplyr::pull(max)
+  
+  title = ifelse(MSR == "MSR_Donor", "donor", "acceptor")
+  if(max(MSR_density)/min(MSR_density) > 20){
+    plotMSR_2breaks(MSR_df, MSR, MSR_density, title) %>% print()
+  }else{
+    plotMSR_1break(MSR_df, MSR, title) %>% print()
+  }
+  
+  if(MSR == "MSR_D"){
+    cat("<br><br><br>")
+  }
+}
+```
+
+<details>
+<summary>Expand details</summary>
+* X-Axis: The mis-splicing ratio.
+* Y-Axis: Kernel density estimate.
+* Colour: Cluster type as case vs. control.
+* Facets: Different splice sites.
+* Notes: Distributions have a discontinuity at X = 0.05 to better represent all possible MSR values. In some cases, a discontinuity in the Y-axis is also present if the difference between the two sample types exceeds a predefined threshold.
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 2), " Stats {-}\n", sep = "")
+```
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 3), " <ins>Unique annotated introns</ins> {-}\n", sep = "")
+```
+```{r echo = F}
+project_introns %>%
+  dplyr::group_by(ref_type, cluster) %>%
+  dplyr::count(N = n()/2) %>%
+  dplyr::mutate("percent" = round((n/N)*100, digits = 2)) %>%
+  `colnames<-`(c("Mis-spliced site", "Cluster", "# Annotated introns", "# Ann. introns by splice site", "Percent [%]")) %>%
+  print_df(style = "md", full_width = T)
+```
+
+<details>
+<summary>Expand details</summary>
+* \# Annotated introns: number of total annotated introns in the cluster. Since we limit the annotated introns to those common across all samples and clusters, the number is the same for both clusters.
+* \# Ann. introns by splice site: the number of annotated introns for the cluster and splice site.
+* Percent [%]: the percentage that the annotated introns in the splice site represent to the total number of introns in the cluster:
+
+$$
+\text{Percent [%]}=\frac{\text{# Ann. introns by splice site}}{\text{# Annotated introns}}*100\%
+$$
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 3), " <ins>Reads - annotated introns</ins> {-}\n", sep = "")
+```
+```{r echo = F}
+project_introns %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::mutate(total_sum_counts = sum(ref_reads)) %>%
+  dplyr::select(cluster, total_sum_counts) %>%
+  dplyr::group_by(cluster, total_sum_counts) %>%
+  dplyr::count() %>%
+  dplyr::left_join(RBP_metadata %>% select(experiment_type, read_depth),
+                   by = c("cluster" = "experiment_type"), multiple = "all") %>%
+  dplyr::group_by(cluster, total_sum_counts, n) %>%
+  dplyr::summarise(total_read_depth = sum(read_depth)) %>%
+  dplyr::relocate(n, total_read_depth, .after = cluster) %>%
+  dplyr::mutate(percent = round(total_sum_counts/total_read_depth*100, digits = 2)) %>%
+  `colnames<-`(c("Cluster", "# Annotated introns", "# Reads in cluster", "# Ann. intron reads", "Percentage [%]")) %>%
+  print_df(style = "md", full_width = T)
+```
+
+<details>
+<summary>Expand details</summary>
+* \# Annotated introns: number of common annotated introns in the cluster. Since we limit the annotated introns to those common across all samples and clusters, the number is the same for both clusters.
+* \# Reads in cluster: total number of reads from the BAM files that constitutes the cluster.
+* \# Ann. intron reads: reads associated to the annotated introns in the cluster. Only common introns are being counted.
+* Percent [%]: the percentage that the annotated intron reads represent to the total number of reads in the cluster.
+
+$$
+\text{Percent [%]}=\frac{\text{# Ann. intron reads}}{\text{# Reads in cluster}}*100\%
+$$
+</details>
+
+---
+
+```{r results = "asis", echo = FALSE}
+cat(addTitles(base_level, 3), " <ins>Reads - novel junctions</ins> {-}\n", sep = "")
+```
+```{r echo = F}
+project_novel %>%
+  dplyr::group_by(novel_type, cluster) %>%
+  dplyr::mutate(total_sum_counts = sum(novel_reads)) %>%
+  dplyr::select(novel_type, cluster, total_sum_counts) %>%
+  dplyr::left_join(RBP_metadata %>% 
+                     dplyr::select(experiment_type, read_depth) %>%
+                     dplyr::group_by(experiment_type) %>%
+                     dplyr::summarise(total_reads = sum(read_depth)),
+                   by = c("cluster" = "experiment_type"), multiple = "all") %>%
+  dplyr::mutate(percent = round(total_sum_counts/total_reads*100, digits = 2)) %>%
+  dplyr::group_by(cluster, novel_type, total_sum_counts, total_reads, percent) %>%
+  dplyr::summarize(n = n()) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::mutate(N = sum(n)) %>%
+  dplyr::relocate(N, n, total_reads, .after = novel_type) %>%
+  `colnames<-`(c("Cluster", "Novel type", "# Novel junctions", "# Novel junc. in splice site", 
+                 "# Reads in cluster", "# Novel junc. reads", "Percentage [%]")) %>%
+  print_df(style = "md")
+```
+
+<details>
+<summary>Expand details</summary>
+* \# Novel junctions: total number of novel junctions for that particular cluster.
+* \# Novel junc. in splice site: total number of novel junctions for that particular splice site in the cluster.
+* \# Reads in cluster: total number of reads from the BAM files that constitutes the cluster.
+* \# Novel junc. reads: reads associated to the novel junctions in the cluster and splice site.
+* Percent [%]: the percentage that the novel junction reads represent to the total number of reads in the cluster.
+
+$$
+\text{Percent [%]}=\frac{\text{# Novel junc. reads}}{\text{# Reads in cluster}}*100\%
+$$
+</details>
